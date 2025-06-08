@@ -1,0 +1,7 @@
+﻿################################################################################
+# Diese .gitignore-Datei wurde von Microsoft(R) Visual Studio automatisch erstellt.
+################################################################################
+
+/MCP_DevSolution_1_FrontendClient_ModelContextProtocol/obj/Debug/net9.0-windows
+/MCP_DevSolution_1_FrontendClient_ModelContextProtocol/obj
+/MCP_DevSolution_1_FrontendClient_ModelContextProtocol/.vs/MCP_DevSolution_1_FrontendClient_ModelContextProtocol/DesignTimeBuild
