@@ -13,6 +13,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         private readonly ProfileService _profileService;
         private readonly AliasService _aliasService;
         private readonly TriggerService _triggerService;
+        private readonly NetworkService _networkService; // Added NetworkService
 
         // Sub-ViewModels
         public ConnectionProfileViewModel ConnectionProfileVM { get; private set; }
@@ -47,11 +48,12 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             _profileService = new ProfileService();
             _aliasService = new AliasService();
             _triggerService = new TriggerService();
+            _networkService = new NetworkService(); // Instantiate NetworkService
 
             // Instantiate sub-ViewModels (pass necessary services, other ViewModels, and LogMessage action)
             AliasVM = new AliasViewModel(_aliasService, LogMessage);
             TriggerVM = new TriggerViewModel(_triggerService, _aliasService, AliasVM, LogMessage);
-            ConnectionProfileVM = new ConnectionProfileViewModel(_profileService, LogMessage);
+            ConnectionProfileVM = new ConnectionProfileViewModel(_profileService, LogMessage, _networkService); // Pass NetworkService
 
             // Initialize collections
             ServerOutputMessages = new ObservableCollection<string>();
@@ -60,8 +62,55 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             // Initialize commands
             SendCommand = new RelayCommand(async _ => await ExecuteSendCommandAsync(), _ => CanExecuteSendCommand());
 
+            // Subscribe to NetworkService events
+            _networkService.DataReceived += OnNetworkDataReceived;
+            // StatusChanged and ConnectionLost/Established are handled by ConnectionProfileViewModel directly
+
             // Load initial data for sub-ViewModels (they load their own data in their constructors)
              _ = LoadAllInitialDataAsync(); // Fire-and-forget
+        }
+
+        private void OnNetworkDataReceived(string data)
+        {
+            // Ensure this runs on the UI thread if ServerOutputMessages is bound to UI
+            System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                string trimmedData = data.TrimEnd('\r', '\n'); // Trim CR and LF
+                LogMessage(trimmedData); // Use LogMessage to add to ServerOutputMessages
+
+                // Process triggers based on received data
+                string commandFromTrigger = TriggerVM.ProcessLineForTrigger(trimmedData);
+                if (!string.IsNullOrEmpty(commandFromTrigger))
+                {
+                    LogMessage($"TRIGGER FIRED! Sending command: '{commandFromTrigger}'");
+
+                    // Asynchronously send the triggered command
+                    _ = Task.Run(async () =>
+                    {
+                        if (_networkService.IsConnected)
+                        {
+                            bool triggeredSent = await _networkService.SendDataAsync(commandFromTrigger);
+                            if (!triggeredSent)
+                            {
+                                // Dispatch logging back to UI thread
+                                System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                                    LogMessage($"ERROR: Failed to send triggered command '{commandFromTrigger}'.")
+                                );
+                            }
+                            // else: Successfully sent, server will respond, and that response will trigger OnNetworkDataReceived again.
+                        }
+                        else
+                        {
+                            System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                                LogMessage($"ERROR: Trigger fired command '{commandFromTrigger}' but not connected.")
+                            );
+                        }
+                    });
+                     // Add triggered command to history (optional, depends on desired behavior)
+                    _commandHistory.Add(commandFromTrigger);
+                    _commandHistoryIndex = _commandHistory.Count;
+                }
+            });
         }
 
         private async Task LoadAllInitialDataAsync()
@@ -102,30 +151,33 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             }
             CommandInputText = string.Empty; // Clear input field immediately
 
-            ServerOutputMessages.Add($"> {originalCommand}");
+            LogMessage($"> {originalCommand}"); // Use LogMessage to add to ServerOutputMessages
 
             string processedCommand = _aliasService.ProcessCommand(originalCommand, AliasVM.Aliases.ToList());
             if (!originalCommand.Equals(processedCommand, System.StringComparison.Ordinal))
             {
-                ServerOutputMessages.Add($"ALIAS: '{originalCommand}' -> '{processedCommand}'");
+                LogMessage($"ALIAS: '{originalCommand}' -> '{processedCommand}'");
             }
 
-            ServerOutputMessages.Add($"SENT: {processedCommand}"); // Simulate sending
-
-            // Simulate server response and trigger processing
-            // In a real app, this response would come from a server connection service
-            await Task.Delay(50); // Simulate network latency
-            string simulatedServerResponse = $"SERVER ECHO: {processedCommand}";
-            ServerOutputMessages.Add(simulatedServerResponse);
-
-            string commandFromTrigger = TriggerVM.ProcessLineForTrigger(simulatedServerResponse);
-            if (!string.IsNullOrEmpty(commandFromTrigger))
+            // Actual send to network
+            if (_networkService.IsConnected)
             {
-                ServerOutputMessages.Add($"TRIGGER FIRED! Sending command: '{commandFromTrigger}'");
-                _commandHistory.Add(commandFromTrigger); // Add triggered command to history
-                _commandHistoryIndex = _commandHistory.Count;
-                ServerOutputMessages.Add($"SENT (from trigger): {commandFromTrigger}");
+                bool sent = await _networkService.SendDataAsync(processedCommand);
+                if (!sent) // SendDataAsync already logs its own errors via StatusChanged
+                {
+                    // LogMessage($"ERROR: Failed to send command '{processedCommand}'. Not connected or stream error.");
+                    // NetworkService.StatusChanged event should handle detailed error logging.
+                    // MainViewModel can log a more generic "failed to send" if needed, but might be redundant.
+                }
+                // Server's response will be handled by OnNetworkDataReceived, which will then process triggers.
             }
+            else
+            {
+                LogMessage($"ERROR: Cannot send command. Not connected.");
+            }
+
+            // The simulated server response and direct trigger processing from here are removed.
+            // Trigger processing now happens in OnNetworkDataReceived.
         }
 
         private bool CanExecuteSendCommand()

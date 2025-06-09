@@ -12,6 +12,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
     {
         private readonly ProfileService _profileService;
         private readonly Action<string> _logMessageAction;
+        private readonly NetworkService _networkService;
 
         public ObservableCollection<ConnectionProfile> Profiles { get; private set; }
 
@@ -35,7 +36,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         }
 
         // Properties for dialog input
-        private string _editProfileName;
+        private string _editProfileName; // Kept for potential future use or if dialog data needs to be staged in VM
         public string EditProfileName { get => _editProfileName; set => SetProperty(ref _editProfileName, value); }
 
         private string _editServerHost;
@@ -47,18 +48,74 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         public ICommand OpenAddProfileDialogCommand { get; }
         public ICommand OpenEditProfileDialogCommand { get; }
         public ICommand DeleteProfileCommand { get; }
+        public ICommand ConnectCommand { get; }
+        public ICommand DisconnectCommand { get; }
 
-        public ConnectionProfileViewModel(ProfileService profileService, Action<string> logMessageAction)
+        private bool _isConnected;
+        public bool IsConnected { get => _isConnected; private set { if (SetProperty(ref _isConnected, value)) { UpdateCommandStates(); } } }
+
+        private bool _isConnecting;
+        public bool IsConnecting { get => _isConnecting; private set { if (SetProperty(ref _isConnecting, value)) { UpdateCommandStates(); } } }
+
+        public ConnectionProfileViewModel(ProfileService profileService, Action<string> logMessageAction, NetworkService networkService)
         {
             _profileService = profileService ?? throw new ArgumentNullException(nameof(profileService));
             _logMessageAction = logMessageAction ?? throw new ArgumentNullException(nameof(logMessageAction));
+            _networkService = networkService ?? throw new ArgumentNullException(nameof(networkService));
             Profiles = new ObservableCollection<ConnectionProfile>();
 
             OpenAddProfileDialogCommand = new RelayCommand(ExecuteOpenAddProfileDialog);
             OpenEditProfileDialogCommand = new RelayCommand(ExecuteOpenEditProfileDialog, CanEditOrDeleteProfile);
             DeleteProfileCommand = new RelayCommand(async () => await ExecuteDeleteProfileAsync(), CanEditOrDeleteProfile);
+            ConnectCommand = new RelayCommand(async _ => await ExecuteConnectAsync(), _ => CanExecuteConnect());
+            DisconnectCommand = new RelayCommand(_ => ExecuteDisconnect(), _ => CanExecuteDisconnect());
+
+            _networkService.StatusChanged += OnNetworkStatusChanged;
+            _networkService.ConnectionEstablished += OnNetworkConnectionEstablished;
+            _networkService.ConnectionLost += OnNetworkConnectionLost;
 
             _ = LoadProfilesDataAsync();
+        }
+
+        private void OnNetworkStatusChanged(string statusMessage)
+        {
+            System.Windows.Application.Current.Dispatcher.InvokeAsync(() => _logMessageAction(statusMessage));
+        }
+
+        private void OnNetworkConnectionEstablished()
+        {
+            System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                IsConnected = true;
+                IsConnecting = false;
+                UpdateSelectedProfileStatus("Online");
+                UpdateCommandStates();
+            });
+        }
+
+        private void OnNetworkConnectionLost()
+        {
+            System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                IsConnected = false;
+                IsConnecting = false;
+                UpdateSelectedProfileStatus("Offline");
+                UpdateCommandStates();
+            });
+        }
+
+        private void UpdateSelectedProfileStatus(string newStatus)
+        {
+            if (SelectedProfile != null)
+            {
+                SelectedProfile.Status = newStatus;
+            }
+        }
+
+        private void UpdateCommandStates()
+        {
+            ((RelayCommand)ConnectCommand).RaiseCanExecuteChanged();
+            ((RelayCommand)DisconnectCommand).RaiseCanExecuteChanged();
         }
 
         private async Task LoadProfilesDataAsync()
@@ -76,9 +133,65 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             }
         }
 
-        private bool CanEditOrDeleteProfile(object parameter = null)
+        private bool CanEditOrDeleteProfile(object parameter = null) // For Edit/Delete Profile buttons
         {
-            return SelectedProfile != null;
+            return SelectedProfile != null && !IsConnecting && !IsConnected; // Can't edit/delete if connected or trying to connect
+        }
+
+        private async Task ExecuteConnectAsync()
+        {
+            if (SelectedProfile == null)
+            {
+                _logMessageAction("ERROR: No profile selected to connect.");
+                return;
+            }
+            IsConnecting = true;
+            IsConnected = false; // Ensure IsConnected is false while attempting to connect
+            UpdateSelectedProfileStatus("Connecting...");
+
+            // It's important that ConnectAsync doesn't set IsConnected directly if it runs on another thread
+            // The events ConnectionEstablished/ConnectionLost should handle setting IsConnected/IsConnecting
+            bool success = await _networkService.ConnectAsync(SelectedProfile.ServerHost, SelectedProfile.ServerPort);
+
+            if (!success)
+            {
+                // NetworkService.StatusChanged should have logged the specific transport-level error.
+                // ConnectionLost event (if raised by NetworkService) will set IsConnecting = false and update status to "Offline".
+                // If ConnectAsync returns false without raising ConnectionLost (e.g., "already connected" or pre-check fail),
+                // we need to ensure IsConnecting is reset and status reflects the situation.
+                if (!_networkService.IsConnected) // If truly not connected after attempt
+                {
+                    IsConnecting = false; // Explicitly set IsConnecting to false here as the connection attempt concluded unsuccessfully.
+                    UpdateSelectedProfileStatus("Error"); // Set status to "Error"
+                    _logMessageAction?.Invoke($"ERROR: Connection attempt to '{SelectedProfile.ProfileName}' ({SelectedProfile.ServerHost}:{SelectedProfile.ServerPort}) failed. Review previous messages for details from NetworkService.");
+                }
+                else // This case implies ConnectAsync returned false because it was already connected.
+                {
+                    IsConnecting = false;
+                    IsConnected = true; // Correctly reflect it's still connected.
+                    UpdateSelectedProfileStatus("Online"); // Status should be Online
+                    _logMessageAction?.Invoke($"INFO: Already connected to '{SelectedProfile.ProfileName}'. No new connection attempted.");
+                }
+            }
+            // If success is true, OnNetworkConnectionEstablished will handle setting IsConnected, IsConnecting, and status.
+            // UpdateCommandStates(); // Called by IsConnected/IsConnecting setters.
+        }
+
+        private bool CanExecuteConnect()
+        {
+            return SelectedProfile != null && !IsConnected && !IsConnecting;
+        }
+
+        private void ExecuteDisconnect()
+        {
+            _networkService.Disconnect();
+            // IsConnected and IsConnecting are updated by OnNetworkConnectionLost
+            // UpdateCommandStates(); // Called by IsConnected/IsConnecting setters
+        }
+
+        private bool CanExecuteDisconnect()
+        {
+            return IsConnected;
         }
 
         private void ExecuteOpenAddProfileDialog(object parameter = null)

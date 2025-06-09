@@ -21,8 +21,8 @@
         </Menu>
 
         <ToolBar Grid.Row="1">
-            <Button Name="ConnectButton" Content="[Connect]"/>
-            <Button Name="DisconnectButton" Content="[Disconnect]"/>
+            <Button x:Name="ConnectButton" Content="[Connect]" Command="{Binding ConnectionProfileVM.ConnectCommand}"/>
+            <Button x:Name="DisconnectButton" Content="[Disconnect]" Command="{Binding ConnectionProfileVM.DisconnectCommand}"/>
             <Button Name="ProfilesButton" Content="[Profiles]"/>
             <Button Name="AliasesButton" Content="[Aliases]"/>
             <Button Name="TriggersButton" Content="[Triggers]"/>
