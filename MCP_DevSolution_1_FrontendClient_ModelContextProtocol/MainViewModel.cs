@@ -10,10 +10,14 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
     public class MainViewModel : ViewModelBase
     {
         // Services
+        // Services
         private readonly ProfileService _profileService;
         private readonly AliasService _aliasService;
         private readonly TriggerService _triggerService;
-        private readonly NetworkService _networkService; // Added NetworkService
+        private readonly NetworkService _networkService;
+        private readonly McpParserService _mcpParserService; // Added
+        private readonly McpSessionManager _mcpSessionManager; // Added
+
 
         // Sub-ViewModels
         public ConnectionProfileViewModel ConnectionProfileVM { get; private set; }
@@ -39,6 +43,8 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             }
         }
         public ICommand SendCommand { get; }
+        public bool IsMcpActive => _mcpSessionManager?.IsNegotiated ?? false;
+        public string McpStatusDisplay => IsMcpActive ? "MCP: Active" : "MCP: Inactive"; // Added
         private List<string> _commandHistory = new List<string>();
         private int _commandHistoryIndex = 0; // Points to the next spot to add, or current spot when navigating
 
@@ -48,12 +54,19 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             _profileService = new ProfileService();
             _aliasService = new AliasService();
             _triggerService = new TriggerService();
-            _networkService = new NetworkService(); // Instantiate NetworkService
+            _networkService = new NetworkService();
+            _mcpParserService = new McpParserService(); // Instantiate McpParserService
 
             // Instantiate sub-ViewModels (pass necessary services, other ViewModels, and LogMessage action)
             AliasVM = new AliasViewModel(_aliasService, LogMessage);
+            // TriggerVM needs AliasService for its ProcessCommand and AliasVM to get the Aliases list
             TriggerVM = new TriggerViewModel(_triggerService, _aliasService, AliasVM, LogMessage);
-            ConnectionProfileVM = new ConnectionProfileViewModel(_profileService, LogMessage, _networkService); // Pass NetworkService
+            ConnectionProfileVM = new ConnectionProfileViewModel(_profileService, LogMessage, _networkService);
+
+            // Instantiate McpSessionManager (after NetworkService and McpParserService)
+            _mcpSessionManager = new McpSessionManager(_networkService, _mcpParserService, LogMessage);
+            _mcpSessionManager.PropertyChanged += McpSessionManager_PropertyChanged;
+
 
             // Initialize collections
             ServerOutputMessages = new ObservableCollection<string>();
@@ -64,23 +77,91 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
 
             // Subscribe to NetworkService events
             _networkService.DataReceived += OnNetworkDataReceived;
-            // StatusChanged and ConnectionLost/Established are handled by ConnectionProfileViewModel directly
+            _networkService.ConnectionEstablished += OnNetworkConnectionEstablishedForMcp; // For MCP
+            _networkService.ConnectionLost += OnNetworkConnectionLostForMcp; // For MCP
+            // ConnectionProfileViewModel also subscribes to some of these for its own state.
 
             // Load initial data for sub-ViewModels (they load their own data in their constructors)
              _ = LoadAllInitialDataAsync(); // Fire-and-forget
         }
 
-        private void OnNetworkDataReceived(string data)
+        private void McpSessionManager_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
-            // Ensure this runs on the UI thread if ServerOutputMessages is bound to UI
+            if (e.PropertyName == nameof(McpSessionManager.IsNegotiated))
+            {
+                OnPropertyChanged(nameof(IsMcpActive));
+                OnPropertyChanged(nameof(McpStatusDisplay)); // Notify McpStatusDisplay changed
+            }
+        }
+
+        private void OnNetworkConnectionEstablishedForMcp()
+        {
+            // Start MCP negotiation in a fire-and-forget task to avoid blocking
+            _ = Task.Run(async () => await _mcpSessionManager.StartNegotiationAsync());
+        }
+
+        private void OnNetworkConnectionLostForMcp()
+        {
+            // Reset MCP session state when the underlying network connection is lost
+            _mcpSessionManager.ResetSessionState();
+        }
+
+        private void OnNetworkDataReceived(string rawData)
+        {
+            // Dispatch all processing to UI thread to ensure sequential handling and UI safety
             System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
-                string trimmedData = data.TrimEnd('\r', '\n'); // Trim CR and LF
-                LogMessage(trimmedData); // Use LogMessage to add to ServerOutputMessages
+                string trimmedData = rawData.TrimEnd('\r', '\n');
+                McpMessage mcpMessage = _mcpParserService.Parse(trimmedData);
 
-                // Process triggers based on received data
-                string commandFromTrigger = TriggerVM.ProcessLineForTrigger(trimmedData);
-                if (!string.IsNullOrEmpty(commandFromTrigger))
+                if (mcpMessage != null)
+                {
+                    // It's an MCP message. McpSessionManager's HandleIncomingMcpMessage will log it.
+                    _mcpSessionManager.HandleIncomingMcpMessage(mcpMessage);
+                    // Typically, MCP messages themselves don't fire user-defined text triggers.
+                }
+                else
+                {
+                    // Not an MCP message, treat as plain server text
+                    LogMessage(trimmedData); // Add to ServerOutputMessages
+
+                    // Process non-MCP lines for triggers
+                    string commandFromTrigger = TriggerVM.ProcessLineForTrigger(trimmedData);
+                    if (!string.IsNullOrEmpty(commandFromTrigger))
+                    {
+                        LogMessage($"TRIGGER FIRED! Sending command: '{commandFromTrigger}'");
+
+                        // Asynchronously send the triggered command
+                        _ = Task.Run(async () =>
+                        {
+                            if (_networkService.IsConnected)
+                            {
+                                bool triggeredSent = await _networkService.SendDataAsync(commandFromTrigger);
+                                if (!triggeredSent)
+                                {
+                                    // Dispatch logging back to UI thread
+                                    System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                                        LogMessage($"ERROR: Failed to send triggered command '{commandFromTrigger}'.")
+                                    );
+                                }
+                                // else: Successfully sent, server will respond, and that response will trigger OnNetworkDataReceived again.
+                            }
+                            else
+                            {
+                                System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                                    LogMessage($"ERROR: Trigger fired command '{commandFromTrigger}' but not connected.")
+                                );
+                            }
+                        });
+                         // Add triggered command to history (optional, depends on desired behavior)
+                        _commandHistory.Add(commandFromTrigger);
+                        _commandHistoryIndex = _commandHistory.Count;
+                    }
+                }
+            });
+        }
+
+        private async Task LoadAllInitialDataAsync()
                 {
                     LogMessage($"TRIGGER FIRED! Sending command: '{commandFromTrigger}'");
 

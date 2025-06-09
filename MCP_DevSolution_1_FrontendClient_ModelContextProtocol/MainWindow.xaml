@@ -23,9 +23,15 @@
         <ToolBar Grid.Row="1">
             <Button x:Name="ConnectButton" Content="[Connect]" Command="{Binding ConnectionProfileVM.ConnectCommand}"/>
             <Button x:Name="DisconnectButton" Content="[Disconnect]" Command="{Binding ConnectionProfileVM.DisconnectCommand}"/>
-            <Button Name="ProfilesButton" Content="[Profiles]"/>
-            <Button Name="AliasesButton" Content="[Aliases]"/>
-            <Button Name="TriggersButton" Content="[Triggers]"/>
+            <Button Name="ProfilesButton" Content="[Profiles]"/> <!-- Placeholder, no command yet -->
+            <Button Name="AliasesButton" Content="[Aliases]"/>   <!-- Placeholder, no command yet -->
+            <Button Name="TriggersButton" Content="[Triggers]"/>  <!-- Placeholder, no command yet -->
+            <Separator/>
+            <TextBlock Text="{Binding McpStatusDisplay}" VerticalAlignment="Center" Margin="5,0">
+                <TextBlock.ToolTip>
+                    <ToolTip Content="{Binding McpStatusDisplay}"/>
+                </TextBlock.ToolTip>
+            </TextBlock>
         </ToolBar>
 
         <Grid Grid.Row="2">
