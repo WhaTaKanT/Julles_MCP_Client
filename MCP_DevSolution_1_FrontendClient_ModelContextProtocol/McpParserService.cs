@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.RegularExpressions; // For a more robust parser later if needed
+using System.Text.Json; // For JsonSerializer and JsonException
 
 namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
 {
     public class McpParserService
     {
         private const string McpPrefix = "#$#";
+        private const string McpToolDefineMessageName = "dns-com-yourorg-tool-define"; // Placeholder
 
         public McpMessage Parse(string rawLine)
         {
@@ -102,6 +104,35 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
                         {
                             mcpMsg.AddArgument(key, value);
                         }
+                    }
+                }
+            }
+
+            if (messageName.Equals(McpToolDefineMessageName, StringComparison.OrdinalIgnoreCase))
+            {
+                string toolName = mcpMsg.GetArgument("name");
+                string toolDescription = mcpMsg.GetArgument("description");
+                string paramsJson = mcpMsg.GetArgument("parameters");
+
+                if (!string.IsNullOrWhiteSpace(toolName) && !string.IsNullOrWhiteSpace(toolDescription) && !string.IsNullOrWhiteSpace(paramsJson))
+                {
+                    try
+                    {
+                        var parameters = JsonSerializer.Deserialize<List<McpToolParameter>>(paramsJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        if (parameters != null)
+                        {
+                            mcpMsg.DefinedTool = new McpTool
+                            {
+                                Name = toolName,
+                                Description = toolDescription,
+                                Parameters = parameters
+                            };
+                        }
+                    }
+                    catch (JsonException ex)
+                    {
+                        // Log error: failed to parse tool parameters JSON
+                        System.Diagnostics.Debug.WriteLine($"MCP Parser: Failed to deserialize parameters for tool '{toolName}'. JSON: {paramsJson}. Error: {ex.Message}");
                     }
                 }
             }

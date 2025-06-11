@@ -14,6 +14,8 @@ using System.Linq; // Required for .ToList()
 //using System.Windows; // Required for MessageBox - already included by default project templates or via System.Windows.Controls
 using System.Text.RegularExpressions; // Required for Regex validation
 using System.Threading.Tasks; // Required for Task
+using System.Globalization; // Required for CultureInfo
+using System.Windows.Data; // Required for IValueConverter
 
 namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
 {
@@ -86,5 +88,22 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         // Service instances and sub-ViewModel instances are now owned by MainViewModel.
         // Command history is now owned by MainViewModel.
         // ServerOutputMessages is now owned by MainViewModel and bound in XAML.
+    }
+
+    public class RoleToDisplayConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value is string role)
+            {
+                return culture.TextInfo.ToTitleCase(role); // Example: "user" -> "User"
+            }
+            return value;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

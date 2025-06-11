@@ -9,6 +9,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         public string MessageName { get; set; }
         public Dictionary<string, string> Arguments { get; private set; }
         public string RawMessageContent { get; private set; } // The original string after #$# (message-name and args-string)
+        public McpTool DefinedTool { get; set; } // Used if this message defines an MCP tool
 
         public McpMessage(string messageName, string rawContent = null)
         {

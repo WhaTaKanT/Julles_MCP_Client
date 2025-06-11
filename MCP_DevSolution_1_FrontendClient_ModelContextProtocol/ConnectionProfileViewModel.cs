@@ -13,6 +13,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         private readonly ProfileService _profileService;
         private readonly Action<string> _logMessageAction;
         private readonly NetworkService _networkService;
+        private readonly IDialogService _dialogService;
 
         public ObservableCollection<ConnectionProfile> Profiles { get; private set; }
 
@@ -57,11 +58,12 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         private bool _isConnecting;
         public bool IsConnecting { get => _isConnecting; private set { if (SetProperty(ref _isConnecting, value)) { UpdateCommandStates(); } } }
 
-        public ConnectionProfileViewModel(ProfileService profileService, Action<string> logMessageAction, NetworkService networkService)
+        public ConnectionProfileViewModel(ProfileService profileService, Action<string> logMessageAction, NetworkService networkService, IDialogService dialogService)
         {
             _profileService = profileService ?? throw new ArgumentNullException(nameof(profileService));
             _logMessageAction = logMessageAction ?? throw new ArgumentNullException(nameof(logMessageAction));
             _networkService = networkService ?? throw new ArgumentNullException(nameof(networkService));
+            _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService)); // Add this
             Profiles = new ObservableCollection<ConnectionProfile>();
 
             OpenAddProfileDialogCommand = new RelayCommand(ExecuteOpenAddProfileDialog);
@@ -218,7 +220,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             if (Profiles.Any(p => p.ProfileName.Equals(data.ProfileName, System.StringComparison.OrdinalIgnoreCase)))
             {
                 _logMessageAction?.Invoke($"ERROR: A profile with the name '{data.ProfileName}' already exists.");
-                MessageBox.Show($"A profile with the name '{data.ProfileName}' already exists. Please choose a different name.", "Add Profile Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                _dialogService.ShowError($"A profile with the name '{data.ProfileName}' already exists. Please choose a different name.", "Add Profile Error");
                 return;
             }
 
@@ -303,9 +305,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             if (SelectedProfile == null) return;
             string profileNameToDelete = SelectedProfile.ProfileName;
 
-            MessageBoxResult result = MessageBox.Show($"Are you sure you want to delete the profile '{profileNameToDelete}'?",
-                                                       "Delete Profile", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result == MessageBoxResult.Yes)
+            if (_dialogService.ShowConfirmation($"Are you sure you want to delete the profile '{profileNameToDelete}'?", "Delete Profile"))
             {
                 Profiles.Remove(SelectedProfile);
                 bool success = await _profileService.SaveProfilesAsync(Profiles.ToList());

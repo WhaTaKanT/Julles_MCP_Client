@@ -17,12 +17,16 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         private readonly NetworkService _networkService;
         private readonly McpParserService _mcpParserService; // Added
         private readonly McpSessionManager _mcpSessionManager; // Added
+        private readonly LlmConfigurationService _llmConfigurationService;
+        private readonly HttpService _httpService;
 
 
         // Sub-ViewModels
         public ConnectionProfileViewModel ConnectionProfileVM { get; private set; }
         public AliasViewModel AliasVM { get; private set; }
         public TriggerViewModel TriggerVM { get; private set; }
+        public LlmConfigurationViewModel LlmConfigVM { get; private set; }
+        public LlmChatViewModel LlmChatVM { get; private set; }
 
         // Logging Properties
         public ObservableCollection<string> ServerOutputMessages { get; private set; }
@@ -48,6 +52,28 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         private List<string> _commandHistory = new List<string>();
         private int _commandHistoryIndex = 0; // Points to the next spot to add, or current spot when navigating
 
+        private string _llmMudPrompt;
+        public string LlmMudPrompt
+        {
+            get => _llmMudPrompt;
+            set => SetProperty(ref _llmMudPrompt, value, nameof(LlmMudPrompt), () => ((RelayCommand)AskLlmForMudCommand).RaiseCanExecuteChanged());
+        }
+        public ICommand AskLlmForMudCommand { get; }
+
+        private string _llmInfoNotes;
+        public string LlmInfoNotes
+        {
+            get => _llmInfoNotes;
+            set
+            {
+                if (SetProperty(ref _llmInfoNotes, value))
+                {
+                    // Saving will be handled by an explicit command
+                }
+            }
+        }
+        public ICommand SaveLlmInfoNotesCommand { get; private set; }
+
         public MainViewModel()
         {
             // Instantiate services
@@ -56,12 +82,17 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             _triggerService = new TriggerService();
             _networkService = new NetworkService();
             _mcpParserService = new McpParserService(); // Instantiate McpParserService
+            _llmConfigurationService = new LlmConfigurationService();
+            _httpService = new HttpService();
 
             // Instantiate sub-ViewModels (pass necessary services, other ViewModels, and LogMessage action)
             AliasVM = new AliasViewModel(_aliasService, LogMessage);
             // TriggerVM needs AliasService for its ProcessCommand and AliasVM to get the Aliases list
             TriggerVM = new TriggerViewModel(_triggerService, _aliasService, AliasVM, LogMessage);
-            ConnectionProfileVM = new ConnectionProfileViewModel(_profileService, LogMessage, _networkService);
+            var dialogService = new DialogService();
+            ConnectionProfileVM = new ConnectionProfileViewModel(_profileService, LogMessage, _networkService, dialogService);
+            LlmConfigVM = new LlmConfigurationViewModel(_llmConfigurationService, dialogService, LogMessage);
+            LlmChatVM = new LlmChatViewModel(LlmConfigVM, _httpService, LogMessage);
 
             // Instantiate McpSessionManager (after NetworkService and McpParserService)
             _mcpSessionManager = new McpSessionManager(_networkService, _mcpParserService, LogMessage);
@@ -74,6 +105,8 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
 
             // Initialize commands
             SendCommand = new RelayCommand(async _ => await ExecuteSendCommandAsync(), _ => CanExecuteSendCommand());
+            AskLlmForMudCommand = new RelayCommand(async () => await ExecuteAskLlmForMudCommandAsync(), CanExecuteAskLlmForMudCommand);
+            SaveLlmInfoNotesCommand = new RelayCommand(async () => await SaveLlmInfoNotesAsync());
 
             // Subscribe to NetworkService events
             _networkService.DataReceived += OnNetworkDataReceived;
@@ -83,7 +116,16 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
 
             // Load initial data for sub-ViewModels (they load their own data in their constructors)
              _ = LoadAllInitialDataAsync(); // Fire-and-forget
+            _ = LoadLlmInfoNotesAsync();
+
+            LlmChatVM.PropertyChanged += (sender, args) => {
+                if (args.PropertyName == nameof(LlmChatVM.SelectedLlmConfig) || args.PropertyName == nameof(LlmChatVM.ActiveLlmService) || args.PropertyName == nameof(LlmChatVM.IsSending))
+                {
+                    ((RelayCommand)AskLlmForMudCommand).RaiseCanExecuteChanged();
+                }
+            };
         }
+
 
         private void McpSessionManager_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
@@ -105,6 +147,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             // Reset MCP session state when the underlying network connection is lost
             _mcpSessionManager.ResetSessionState();
         }
+
 
         private void OnNetworkDataReceived(string rawData)
         {
@@ -162,39 +205,6 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
         }
 
         private async Task LoadAllInitialDataAsync()
-                {
-                    LogMessage($"TRIGGER FIRED! Sending command: '{commandFromTrigger}'");
-
-                    // Asynchronously send the triggered command
-                    _ = Task.Run(async () =>
-                    {
-                        if (_networkService.IsConnected)
-                        {
-                            bool triggeredSent = await _networkService.SendDataAsync(commandFromTrigger);
-                            if (!triggeredSent)
-                            {
-                                // Dispatch logging back to UI thread
-                                System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
-                                    LogMessage($"ERROR: Failed to send triggered command '{commandFromTrigger}'.")
-                                );
-                            }
-                            // else: Successfully sent, server will respond, and that response will trigger OnNetworkDataReceived again.
-                        }
-                        else
-                        {
-                            System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
-                                LogMessage($"ERROR: Trigger fired command '{commandFromTrigger}' but not connected.")
-                            );
-                        }
-                    });
-                     // Add triggered command to history (optional, depends on desired behavior)
-                    _commandHistory.Add(commandFromTrigger);
-                    _commandHistoryIndex = _commandHistory.Count;
-                }
-            });
-        }
-
-        private async Task LoadAllInitialDataAsync()
         {
             // Sub-ViewModels (ConnectionProfileVM, AliasVM, TriggerVM) already call their
             // respective LoadDataAsync methods in their constructors.
@@ -237,8 +247,9 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             string processedCommand = _aliasService.ProcessCommand(originalCommand, AliasVM.Aliases.ToList());
             if (!originalCommand.Equals(processedCommand, System.StringComparison.Ordinal))
             {
-                LogMessage($"ALIAS: '{originalCommand}' -> '{processedCommand}'");
+            LogMessage($"ALIAS: '{originalCommand}' -> '{processedCommand}'");
             }
+            // string processedCommand = originalCommand; // Send command as is
 
             // Actual send to network
             if (_networkService.IsConnected)
@@ -291,6 +302,118 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
                     _commandHistoryIndex = _commandHistory.Count;
                     CommandInputText = string.Empty;
                 }
+            }
+        }
+
+        private bool CanExecuteAskLlmForMudCommand(object parameter = null)
+        {
+            return !string.IsNullOrWhiteSpace(LlmMudPrompt) &&
+                   LlmChatVM != null &&
+                   LlmChatVM.SelectedLlmConfig != null &&
+                   LlmChatVM.ActiveLlmService != null && // Check the exposed service
+                   !LlmChatVM.IsSending;
+        }
+
+        private async Task ExecuteAskLlmForMudCommandAsync()
+        {
+            if (!CanExecuteAskLlmForMudCommand()) return;
+
+            LlmChatVM.IsSending = true; // Signal that an LLM operation is in progress
+            LogMessage($"Asking LLM ({LlmChatVM.SelectedLlmConfig.ConfigName}) for MUD command based on prompt: \"{LlmMudPrompt}\"");
+
+            // Construct messages for the LLM.
+            var messagesForLlm = new List<ChatMessage>();
+            if (LlmChatVM.SelectedLlmConfig != null && !string.IsNullOrWhiteSpace(LlmChatVM.SelectedLlmConfig.SystemPrompt))
+            {
+                messagesForLlm.Add(new ChatMessage("system", LlmChatVM.SelectedLlmConfig.SystemPrompt +
+                    " You are assisting a user playing a MUD (text-based adventure game). Your goal is to suggest a single, concise command for the user to enter into the MUD based on their prompt. The command should be directly executable in the MUD. Do not provide explanations unless explicitly asked."));
+            }
+            else
+            {
+                messagesForLlm.Add(new ChatMessage("system", "You are assisting a user playing a MUD (text-based adventure game). Your goal is to suggest a single, concise command for the user to enter into the MUD based on their prompt. The command should be directly executable in the MUD. Do not provide explanations unless explicitly asked."));
+            }
+            messagesForLlm.Add(new ChatMessage("user", LlmMudPrompt));
+
+            // If ServerOutputMessages has content, consider adding the last few lines as context
+            // For example:
+            // int contextLines = 5;
+            // var mudContext = ServerOutputMessages.Skip(Math.Max(0, ServerOutputMessages.Count - contextLines)).ToList();
+            // if (mudContext.Any()) {
+            //    messagesForLlm.Insert(1, new ChatMessage("user", $"Current MUD Context:\n---\n{string.Join("\n", mudContext)}\n---"));
+            // }
+
+
+            try
+            {
+                ILlmService serviceToUse = LlmChatVM.ActiveLlmService;
+                if (serviceToUse == null) {
+                    LogMessage("ERROR: LLM service for MUD command generation is not available (was null when executing).");
+                    CommandInputText = "[Error: LLM Service not available for MUD prompt]";
+                    LlmChatVM.IsSending = false; // Ensure this is reset
+                    ((RelayCommand)AskLlmForMudCommand).RaiseCanExecuteChanged();
+                    return;
+                }
+
+                string llmResponse = await serviceToUse.SendChatAsync(LlmChatVM.SelectedLlmConfig, messagesForLlm);
+
+                if (!string.IsNullOrWhiteSpace(llmResponse))
+                {
+                    // Place the LLM's suggested command into the MUD command input text box
+                    CommandInputText = llmResponse.Trim();
+                    LogMessage($"LLM suggested MUD command: \"{CommandInputText}\"");
+                    LlmMudPrompt = string.Empty; // Clear the LLM MUD prompt
+                }
+                else
+                {
+                    CommandInputText = "[LLM suggested no command]";
+                    LogMessage("LLM did not suggest a MUD command.");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"ERROR: Failed to get MUD command suggestion from LLM: {ex.Message}");
+                CommandInputText = $"[Error asking LLM: {ex.Message}]";
+            }
+            finally
+            {
+                LlmChatVM.IsSending = false;
+                ((RelayCommand)AskLlmForMudCommand).RaiseCanExecuteChanged(); // Re-evaluate CanExecute
+            }
+        }
+
+        private async Task LoadLlmInfoNotesAsync()
+        {
+            string filePath = "LlmInfoNotes.txt";
+            if (System.IO.File.Exists(filePath))
+            {
+                try
+                {
+                    LlmInfoNotes = await Task.Run(() => System.IO.File.ReadAllText(filePath));
+                    LogMessage("INFO: Loaded LLM info notes.");
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"ERROR: Failed to load LLM info notes: {ex.Message}");
+                }
+            }
+            else
+            {
+                LlmInfoNotes = "Enter your notes about LLM providers, models, API links, etc. here.\n";
+            }
+        }
+
+        private async Task SaveLlmInfoNotesAsync()
+        {
+            string filePath = "LlmInfoNotes.txt";
+            try
+            {
+                await Task.Run(() => System.IO.File.WriteAllText(filePath, LlmInfoNotes ?? string.Empty));
+                LogMessage("INFO: LLM info notes saved.");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"ERROR: Failed to save LLM info notes: {ex.Message}");
+                System.Windows.MessageBox.Show($"Failed to save LLM info notes: {ex.Message}", "Save Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
             }
         }
     }

@@ -95,25 +95,85 @@
                 <!-- Other potential left sidebar tabs can be added here -->
             </TabControl>
 
-            <!-- Placeholder for Central Area -->
-            <Grid Grid.Column="1">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>    <!-- Output Display -->
-                    <RowDefinition Height="Auto"/> <!-- Command Input -->
-                </Grid.RowDefinitions>
+            <!-- Central Area -->
+            <TabControl Grid.Column="1" x:Name="CentralAreaTabControl">
+                <TabItem Header="MUD Client" x:Name="MudClientTab">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>    <!-- Output Display -->
+                            <RowDefinition Height="Auto"/> <!-- LLM MUD Prompt Input -->
+                            <RowDefinition Height="Auto"/> <!-- Main Command Input -->
+                        </Grid.RowDefinitions>
 
-                <ListView Grid.Row="0" x:Name="ServerOutputListView" ItemsSource="{Binding ServerOutputMessages}">
-                    <ListView.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
+                        <ListView Grid.Row="0" x:Name="ServerOutputListView" ItemsSource="{Binding ServerOutputMessages}">
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
 
-                <TextBox Grid.Row="1" x:Name="CommandInputTextBox"
-                         Text="{Binding CommandInputText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                         PreviewKeyDown="CommandInputTextBox_PreviewKeyDown" />
-            </Grid>
+                        <!-- New section for LLM MUD Prompt -->
+                        <Grid Grid.Row="1" Margin="0,5,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0" x:Name="LlmMudPromptTextBox"
+                                     Text="{Binding LlmMudPrompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="Type your instruction for the LLM here (e.g., 'suggest command to go north', 'what does this item look like?')"
+                                     Margin="0,0,5,0"/>
+                            <Button Grid.Column="1" x:Name="AskLlmButton"
+                                    Content="Ask LLM for MUD Cmd"
+                                    Command="{Binding AskLlmForMudCommand}"
+                                    ToolTip="Sends the instruction to the selected LLM to suggest a MUD command."/>
+                        </Grid>
+
+                        <TextBox Grid.Row="2" x:Name="CommandInputTextBox" Margin="0,5,0,0"
+                                 Text="{Binding CommandInputText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 PreviewKeyDown="CommandInputTextBox_PreviewKeyDown" />
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="LLM Chat" x:Name="LlmChatTab" DataContext="{Binding LlmChatVM}">
+                    <Grid Margin="5">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" /> <!-- LLM Config Selector -->
+                            <RowDefinition Height="*" />   <!-- Chat History -->
+                            <RowDefinition Height="Auto" /> <!-- User Input Area -->
+                            <RowDefinition Height="Auto" /> <!-- Buttons -->
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,5">
+                            <Label Content="Active LLM Config:" VerticalAlignment="Center"/>
+                            <ComboBox ItemsSource="{Binding AvailableLlmConfigs}"
+                                      SelectedItem="{Binding SelectedLlmConfig, Mode=TwoWay}"
+                                      DisplayMemberPath="ConfigName"
+                                      MinWidth="200" VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <ListView Grid.Row="1" x:Name="LlmChatHistoryListView" ItemsSource="{Binding ChatHistory}" Margin="0,5,0,5">
+                            <ListView.ItemTemplate>
+                                <DataTemplate DataType="{x:Type local:ChatMessage}">
+                                    <StackPanel Margin="3">
+                                        <TextBlock FontWeight="Bold" Text="{Binding Role, Converter={StaticResource RoleToDisplayConverter}}"/>
+                                        <TextBlock Text="{Binding Content}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+
+                        <TextBox Grid.Row="2" x:Name="LlmUserInputTextBox" Text="{Binding UserInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 MinHeight="60" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Margin="0,0,0,5"
+                                 IsEnabled="{Binding CanExecuteSendCommand}" /> <!-- Optional: Bind IsEnabled -->
+
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Clear History" Command="{Binding ClearChatHistoryCommand}" Margin="5"/>
+                            <Button Content="Send to LLM" Command="{Binding SendCommand}" IsDefault="True" Margin="5"/>
+                        </StackPanel>
+                    </Grid>
+                </TabItem>
+            </TabControl>
 
             <!-- Placeholder for Right Sidebar -->
             <TabControl Grid.Column="2" x:Name="RightSidebarTabControl">
@@ -139,10 +199,57 @@
                         </StackPanel>
                     </Grid>
                 </TabItem>
+                <TabItem Header="LLM Configs" x:Name="LlmConfigsTab" DataContext="{Binding LlmConfigVM}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/> <!-- ListView -->
+                            <RowDefinition Height="Auto"/> <!-- Buttons -->
+                        </Grid.RowDefinitions>
+                        <ListView Grid.Row="0" x:Name="LlmConfigsListView"
+                                  ItemsSource="{Binding LlmConfigs}"
+                                  SelectedItem="{Binding SelectedLlmConfig, Mode=TwoWay}">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Name" DisplayMemberBinding="{Binding ConfigName}" Width="100"/>
+                                    <GridViewColumn Header="Provider" DisplayMemberBinding="{Binding ProviderType}" Width="100"/>
+                                    <GridViewColumn Header="Endpoint" DisplayMemberBinding="{Binding ApiEndpoint}" Width="150"/>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Margin="5">
+                            <Button x:Name="AddLlmConfigButton" Content="Add" Margin="5" Command="{Binding OpenAddConfigDialogCommand}"/>
+                            <Button x:Name="EditLlmConfigButton" Content="Edit" Margin="5" Command="{Binding OpenEditConfigDialogCommand}"/>
+                            <Button x:Name="DeleteLlmConfigButton" Content="Delete" Margin="5" Command="{Binding DeleteConfigCommand}"/>
+                        </StackPanel>
+                    </Grid>
+                </TabItem>
+                <TabItem Header="LLM Info" x:Name="LlmInfoTab"> <!-- DataContext should be MainViewModel (default for sidebar) -->
+                    <Grid Margin="5">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>    <!-- Notes TextBox -->
+                            <RowDefinition Height="Auto"/> <!-- Save Button -->
+                        </Grid.RowDefinitions>
+
+                        <TextBox Grid.Row="0"
+                                 Text="{Binding LlmInfoNotes, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 TextWrapping="Wrap"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 MinHeight="200"
+                                 FontFamily="Consolas"
+                                 FontSize="12"/>
+
+                        <Button Grid.Row="1"
+                                Content="Save Notes"
+                                Command="{Binding SaveLlmInfoNotesCommand}"
+                                HorizontalAlignment="Right"
+                                Margin="0,5,0,0"/>
+                    </Grid>
+                </TabItem>
                 <TabItem Header="Aliases" x:Name="AliasesTab" DataContext="{Binding AliasVM}">
                     <Grid Margin="5">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="*"/> <!-- ListView -->
+                            <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/> <!-- Input Fields -->
                             <RowDefinition Height="Auto"/> <!-- Buttons -->
                         </Grid.RowDefinitions>
@@ -181,7 +288,7 @@
                 <TabItem Header="Triggers" x:Name="TriggersTab" DataContext="{Binding TriggerVM}">
                     <Grid Margin="5">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="*"/> <!-- ListView -->
+                            <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/> <!-- Input Fields -->
                             <RowDefinition Height="Auto"/> <!-- Buttons -->
                         </Grid.RowDefinitions>
@@ -264,6 +371,7 @@
         </Grid>
     </Grid>
     <Window.Resources>
+        <local:RoleToDisplayConverter x:Key="RoleToDisplayConverter"/>
         <Style TargetType="GridViewColumnHeader">
             <Setter Property="HorizontalContentAlignment" Value="Left" />
         </Style>

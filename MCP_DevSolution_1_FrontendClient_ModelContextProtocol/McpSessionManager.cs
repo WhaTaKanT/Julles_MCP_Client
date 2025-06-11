@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Collections.ObjectModel; // Added for ObservableCollection
 
 namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
 {
@@ -20,6 +21,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
 
         public string ServerMcpVersion { get; private set; }
         public List<string> SupportedServerPackages { get; private set; }
+        public ObservableCollection<McpTool> AvailableMcpTools { get; private set; }
 
         // TODO: Add properties for authentication keys if needed by your assumed MCP spec
         // private string _clientAuthKey = "some_default_client_key"; // Example
@@ -32,6 +34,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             _logMessageAction = logMessageAction ?? throw new ArgumentNullException(nameof(logMessageAction));
 
             SupportedServerPackages = new List<string>();
+            AvailableMcpTools = new ObservableCollection<McpTool>(); // Initialize
             ResetSessionState(); // Initialize state
         }
 
@@ -40,6 +43,7 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             IsNegotiated = false;
             ServerMcpVersion = null;
             SupportedServerPackages.Clear();
+            AvailableMcpTools.Clear(); // Clear tools
             // _serverAuthKey = null; // Reset auth keys if used
             _logMessageAction?.Invoke("INFO: MCP session state reset.");
         }
@@ -93,6 +97,18 @@ namespace MCP_DevSolution_1_FrontendClient_ModelContextProtocol
             string argsString = string.Join(" ", message.Arguments.Select(kv => $"{kv.Key}:\"{kv.Value}\"")); // Quote values for clarity
             _logMessageAction?.Invoke($"RECV MCP: #{message.MessageName} {argsString}");
 
+            if (message.DefinedTool != null)
+            {
+                var existingTool = AvailableMcpTools.FirstOrDefault(t => t.Name.Equals(message.DefinedTool.Name, StringComparison.OrdinalIgnoreCase));
+                if (existingTool != null)
+                {
+                    // Replace existing tool definition
+                    AvailableMcpTools.Remove(existingTool);
+                }
+                AvailableMcpTools.Add(message.DefinedTool);
+                _logMessageAction?.Invoke($"INFO: MCP Tool '{message.DefinedTool.Name}' defined/updated. Total tools: {AvailableMcpTools.Count}");
+                OnPropertyChanged(nameof(AvailableMcpTools)); // Notify if anything is bound to the collection instance itself or Count
+            }
 
             switch (message.MessageName.ToLowerInvariant())
             {
